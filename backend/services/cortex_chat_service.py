@@ -7,12 +7,8 @@ import threading
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
-try:
-    from schemas import ChatMessage
-    from services.snowflake_session_manager import SnowflakeContext
-except ImportError:  # pragma: no cover - package-style fallback
-    from backend.schemas import ChatMessage
-    from backend.services.snowflake_session_manager import SnowflakeContext
+from schemas import ChatMessage
+from services.snowflake_session_manager import SnowflakeContext
 
 logger = logging.getLogger(__name__)
 
@@ -381,44 +377,271 @@ def _stream_cortex(
 
     yield from _stream_cortex_sql_fallback(context, messages)
 
+# ─── Default system prompt for the chat interface ───────────────
+
+from services.tool_definitions import get_tool, get_tools_for_llm
+from services.tool_executor import execute_tool
+
+
+def _build_chat_system_prompt() -> str:
+    """Build the system prompt with current tool schemas."""
+    tools_json = json.dumps(get_tools_for_llm(), indent=2)
+    return f"""\
+You are a **Database Migration Assistant** powered by Snowflake Cortex.
+
+Your primary role is to help users migrate databases to Snowflake.
+
+## Available Tools
+You have access to the following CLI tools that you can execute on the local system:
+
+{tools_json}
+
+## How to Use Tools
+When you need to run a tool, respond with ONLY a JSON object (no other text before or after):
+{{"action": "run_tool", "tool": "<tool_name>", "args": {{...}}, "reasoning": "brief explanation"}}
+
+Example:
+{{"action": "run_tool", "tool": "run_command", "args": {{"command": "python --version"}}, "reasoning": "Checking Python version"}}
+
+When you are done with all tool calls and want to reply to the user, respond with plain text only (no JSON).
+
+## CRITICAL: Error Handling
+When a tool fails (non-zero exit code or error output), you MUST:
+1. Analyze the error message carefully
+2. Determine the root cause
+3. Fix the issue and retry with a corrected command (respond with another tool call JSON)
+4. Only give up and respond with plain text if the error is unrecoverable
+
+Do NOT stop after a single failure. Always attempt to resolve errors before reporting to the user.
+
+## When NOT to Use Tools
+For general questions, explanations, or conversation, respond with plain text as normal.
+Do NOT wrap plain responses in JSON.
+
+## Capabilities
+1. **Initialize** migration projects using SnowConvert AI CLI (scai).
+2. **Run shell commands** to inspect files, check tool versions, and execute scripts.
+3. Help users through the full migration workflow.
+
+Be specific, actionable, and concise.
+"""
+
+
+def _call_cortex_buffered(context: SnowflakeContext, messages: list[ChatMessage]) -> str:
+    """Call Cortex LLM synchronously and return the full response text."""
+    chunks: list[str] = []
+
+    with context.lock:
+        for item in _stream_cortex(context, messages):
+            if not isinstance(item, (tuple, list)) or len(item) < 2:
+                continue
+            evt_kind, value = item[0], item[1]
+            if evt_kind == "delta":
+                chunks.append(value)
+
+    return "".join(chunks)
+
+
+def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
+    """Try to parse the LLM response as a tool call JSON.
+
+    Returns the parsed dict if it's a valid tool call, None otherwise.
+    """
+    cleaned = text.strip()
+
+    # Strip markdown code fences if present
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        json_lines = []
+        in_block = False
+        for line in lines:
+            if line.strip().startswith("```") and not in_block:
+                in_block = True
+                continue
+            if line.strip() == "```" and in_block:
+                break
+            if in_block:
+                json_lines.append(line)
+        cleaned = "\n".join(json_lines).strip()
+
+    # Try direct parse
+    try:
+        obj = json.loads(cleaned)
+        if isinstance(obj, dict) and obj.get("action") in ("run_tool", "finish", "pause"):
+            return obj
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON object in mixed text
+    start = cleaned.find("{")
+    end = cleaned.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            obj = json.loads(cleaned[start:end])
+            if isinstance(obj, dict) and obj.get("action") in ("run_tool", "finish", "pause"):
+                return obj
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
 
 async def stream_chat_events(
     context: SnowflakeContext,
     messages: list[ChatMessage],
 ) -> AsyncIterator[dict[str, Any]]:
+    """Unified chat + agent streaming function.
+
+    Handles both plain conversation and tool execution in a single flow:
+    1. Prepend system prompt with tool schemas
+    2. Call LLM — if response is a tool call JSON, execute the tool
+    3. Feed tool results back and let the LLM decide next steps
+    4. Repeat until the LLM gives a plain text response
+    5. Stream the final text response as delta events
+    """
+    # Prepend system prompt if none exists
+    has_system = any(m.role == "system" for m in messages)
+
+    if not has_system:
+        messages = [
+            ChatMessage(role="system", content=_build_chat_system_prompt()),
+            *messages,
+        ]
+
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    accumulated = list(messages)
+    max_tool_iterations = 15
 
-    def emit(event: dict[str, Any]) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, event)
+    for iteration in range(max_tool_iterations):
+        # ── Show thinking indicator on subsequent iterations ──────
+        if iteration > 0:
+            yield {"type": "delta", "delta": "\n🔄 Analyzing results...\n\n"}
 
-    def worker() -> None:
+        # ── Call LLM (buffered) ──────────────────────────────────
         try:
-            with context.lock:
-                for item in _stream_cortex(context, messages):
-                    if not isinstance(item, (tuple, list)) or len(item) < 2:
-                        logger.warning("Skipping malformed stream item: %r", item)
-                        continue
-                    evt_kind, value = item[0], item[1]
-                    if evt_kind == "delta":
-                        emit({"type": "delta", "delta": value})
-                    elif evt_kind == "usage":
-                        emit({"type": "usage", "usage": value})
-        except Exception as exc:  # pragma: no cover - depends on external env
-            emit({"type": "error", "error": str(exc)})
-        finally:
-            emit({"type": "done"})
+            full_response = await loop.run_in_executor(
+                None,
+                lambda msgs=list(accumulated): _call_cortex_buffered(context, msgs),
+            )
+        except Exception as exc:
+            logger.error("LLM call failed: %s", exc)
+            yield {"type": "delta", "delta": f"\n\n⚠️ LLM error: {exc}"}
+            return
 
-    threading.Thread(target=worker, daemon=True).start()
+        # ── Check if it's a tool call ────────────────────────────
+        tool_call = _try_parse_tool_call(full_response)
 
-    while True:
-        event = await queue.get()
-        event_type = event.get("type")
+        if tool_call is None:
+            # Plain text — stream it as a single delta and finish
+            if full_response.strip():
+                yield {"type": "delta", "delta": full_response}
+            return
 
-        if event_type == "done":
-            break
+        action = tool_call.get("action")
 
-        if event_type == "error":
-            raise RuntimeError(event.get("error") or "Chat streaming failed")
+        # ── FINISH ───────────────────────────────────────────────
+        if action == "finish":
+            summary = tool_call.get("summary", "Done.")
+            yield {"type": "delta", "delta": summary}
+            return
 
-        yield event
+        # ── PAUSE ────────────────────────────────────────────────
+        if action == "pause":
+            guidance = tool_call.get("guidance", "I need more information to proceed.")
+            yield {"type": "delta", "delta": guidance}
+            return
+
+        # ── RUN TOOL ─────────────────────────────────────────────
+        if action == "run_tool":
+            tool_name = tool_call.get("tool", "")
+            tool_args = tool_call.get("args", {})
+            reasoning = tool_call.get("reasoning", "")
+
+            tool_def = get_tool(tool_name)
+
+            if tool_def is None:
+                # Unknown tool — inform the LLM and continue
+                accumulated.append(ChatMessage(role="assistant", content=full_response))
+                accumulated.append(ChatMessage(
+                    role="user",
+                    content=f"Error: Unknown tool '{tool_name}'. Available tools: {', '.join(t['name'] for t in get_tools_for_llm())}",
+                ))
+                continue
+
+            # Build command
+            try:
+                command = tool_def.build_command(tool_args)
+            except KeyError as exc:
+                accumulated.append(ChatMessage(role="assistant", content=full_response))
+                accumulated.append(ChatMessage(
+                    role="user",
+                    content=f"Error: Missing required argument {exc} for tool '{tool_name}'.",
+                ))
+                continue
+
+            # ── Emit tool execution as formatted text deltas ─────
+            if reasoning:
+                yield {"type": "delta", "delta": f"🤔 {reasoning}\n\n"}
+
+            yield {"type": "delta", "delta": f"```\n$ {command}\n"}
+
+            # Execute the tool, streaming output as deltas
+            output_queue: asyncio.Queue[str] = asyncio.Queue()
+
+            async def on_output(stream_name: str, line: str) -> None:
+                await output_queue.put(line)
+
+            exec_task = asyncio.create_task(
+                execute_tool(tool_def, tool_args, on_output=on_output)
+            )
+
+            # Drain output queue while tool runs
+            while not exec_task.done():
+                try:
+                    line = await asyncio.wait_for(output_queue.get(), timeout=0.1)
+                    yield {"type": "delta", "delta": line}
+                except asyncio.TimeoutError:
+                    continue
+
+            # Drain remaining
+            while not output_queue.empty():
+                yield {"type": "delta", "delta": await output_queue.get()}
+
+            result = exec_task.result()
+            status = "✓" if result.exit_code == 0 else f"✗ exit code {result.exit_code}"
+            yield {"type": "delta", "delta": f"```\n📋 {status} ({result.duration_seconds:.1f}s)\n\n"}
+
+            # ── Feed result back to LLM ──────────────────────────
+            accumulated.append(ChatMessage(role="assistant", content=full_response))
+
+            result_text = f"Tool: {tool_name}\nCommand: {command}\nExit Code: {result.exit_code}\n"
+
+            if result.stdout:
+                stdout = result.stdout if len(result.stdout) <= 3000 else (
+                    result.stdout[:1500] + "\n...(truncated)...\n" + result.stdout[-750:]
+                )
+                result_text += f"\nStdout:\n{stdout}"
+
+            if result.stderr:
+                stderr = result.stderr if len(result.stderr) <= 1500 else (
+                    result.stderr[:750] + "\n...(truncated)...\n" + result.stderr[-375:]
+                )
+                result_text += f"\nStderr:\n{stderr}"
+
+            if result.error:
+                result_text += f"\nError: {result.error}"
+
+            # Prompt the LLM to analyze errors
+            if result.exit_code != 0:
+                result_text += (
+                    "\n\nThe command failed. Analyze the error, determine the fix, "
+                    "and respond with a corrected tool call JSON. "
+                    "If unrecoverable, respond with plain text explaining the issue."
+                )
+
+            accumulated.append(ChatMessage(role="user", content=result_text))
+            continue
+
+    # Safety limit
+    yield {"type": "delta", "delta": "\n\n⚠️ Maximum tool iterations reached."}
+

@@ -76,6 +76,23 @@ export class WorkbenchStore {
     this.#terminalStore.onTerminalResize(cols, rows);
   }
 
+  // Agent terminal methods
+  get agentRunId() {
+    return this.#terminalStore.agentRunId;
+  }
+
+  connectAgentTerminal(terminal: ITerminal, runId: string) {
+    this.#terminalStore.connectAgentTerminal(terminal, runId);
+  }
+
+  disconnectAgentTerminal() {
+    this.#terminalStore.disconnectAgentTerminal();
+  }
+
+  writeToAgentTerminal(data: string) {
+    this.#terminalStore.writeToAgentTerminal(data);
+  }
+
   setDocuments(files: FileMap) {
     this.#editorStore.setDocuments(files);
 

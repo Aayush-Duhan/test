@@ -13,4 +13,5 @@ dependencies = [
     "snowflake-connector-python>=3.18.0",
     "snowflake-snowpark-python>=1.41.0",
     "uvicorn[standard]>=0.40.0",
+    "websockets>=15.0",
 ]

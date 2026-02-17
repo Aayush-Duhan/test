@@ -9,32 +9,18 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-try:
-    from config import get_settings
-    from schemas import (
-        ChatRequest,
-        SnowflakeConnectRequest,
-        SnowflakeConnectResponse,
-        SnowflakeDisconnectResponse,
-        SnowflakeStatusResponse,
-    )
-    from services.cortex_chat_service import stream_chat_events
-    from services.snowflake_session_manager import SnowflakeSessionError, SnowflakeSessionManager
-    from services.stream_registry import StreamRegistry
-    from stream.data_stream import build_data_stream, patch_response_headers
-except ImportError:  # pragma: no cover - package-style fallback
-    from backend.config import get_settings
-    from backend.schemas import (
-        ChatRequest,
-        SnowflakeConnectRequest,
-        SnowflakeConnectResponse,
-        SnowflakeDisconnectResponse,
-        SnowflakeStatusResponse,
-    )
-    from backend.services.cortex_chat_service import stream_chat_events
-    from backend.services.snowflake_session_manager import SnowflakeSessionError, SnowflakeSessionManager
-    from backend.services.stream_registry import StreamRegistry
-    from backend.stream.data_stream import build_data_stream, patch_response_headers
+from config import get_settings
+from schemas import (
+    ChatRequest,
+    SnowflakeConnectRequest,
+    SnowflakeConnectResponse,
+    SnowflakeDisconnectResponse,
+    SnowflakeStatusResponse,
+)
+from services.cortex_chat_service import stream_chat_events
+from services.snowflake_session_manager import SnowflakeSessionError, SnowflakeSessionManager
+from services.stream_registry import StreamRegistry
+from stream.data_stream import build_data_stream, patch_response_headers
 
 load_dotenv()
 
@@ -153,11 +139,15 @@ async def chat_endpoint(
 
 @app.get("/api/chat/{chat_id}/stream")
 async def reconnect_stream(chat_id: str) -> Response:
-    # Reconnect endpoint scaffold; resume mode is intentionally disabled for now.
     if stream_registry.has_active_stream(chat_id):
         return Response(status_code=204)
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _ensure_session_id(request: Request) -> str:

@@ -188,6 +188,7 @@ dependencies = [
     { name = "snowflake-connector-python" },
     { name = "snowflake-snowpark-python" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -200,6 +201,7 @@ requires-dist = [
     { name = "snowflake-connector-python", specifier = ">=3.18.0" },
     { name = "snowflake-snowpark-python", specifier = ">=1.41.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.40.0" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]
