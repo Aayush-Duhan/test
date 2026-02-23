@@ -7,6 +7,8 @@ import { Messages } from './Messages.client';
 import { ChatInput } from '~/components/ui/ChatInput';
 import { GitHubImportButton } from '~/components/ui/GitHubImportButton';
 import { RayBackground } from '~/components/ui/RayBackground';
+import type { Language } from '~/components/ui/ModelSelector';
+import type { UploadedFile } from '~/components/ui/AttachMenu';
 import type { SnowflakeConnectPayload } from '~/lib/hooks';
 
 import styles from './BaseChat.module.scss';
@@ -29,6 +31,11 @@ interface BaseChatProps {
   handleStop?: () => void;
   sendMessage?: (event: React.UIEvent, messageInput?: string) => void;
   handleInputChange?: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
+  onLanguageChange?: (language: Language) => void;
+  chatId?: string;
+  uploadedFiles?: UploadedFile[];
+  onFilesUploaded?: (files: UploadedFile[]) => void;
+  onFileRemove?: (fileName: string) => void;
 }
 
 export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
@@ -51,6 +58,11 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       sendMessage,
       handleInputChange,
       handleStop,
+      onLanguageChange,
+      chatId,
+      uploadedFiles,
+      onFilesUploaded,
+      onFileRemove,
     },
     ref,
   ) => {
@@ -93,6 +105,11 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                         snowflakeError={snowflakeError}
                         onSnowflakeConnect={onSnowflakeConnect}
                         onSnowflakeDisconnect={onSnowflakeDisconnect}
+                        onLanguageChange={onLanguageChange}
+                        chatId={chatId}
+                        uploadedFiles={uploadedFiles}
+                        onFilesUploaded={onFilesUploaded}
+                        onFileRemove={onFileRemove}
                         placeholder="What do you want to build?"
                       />
                     </div>
@@ -126,6 +143,11 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                         snowflakeError={snowflakeError}
                         onSnowflakeConnect={onSnowflakeConnect}
                         onSnowflakeDisconnect={onSnowflakeDisconnect}
+                        onLanguageChange={onLanguageChange}
+                        chatId={chatId}
+                        uploadedFiles={uploadedFiles}
+                        onFilesUploaded={onFilesUploaded}
+                        onFileRemove={onFileRemove}
                         placeholder="What do you want to migrate?"
                       />
                     </div>

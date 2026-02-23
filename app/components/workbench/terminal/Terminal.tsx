@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal as XTerm } from '@xterm/xterm';
+import '@xterm/xterm/css/xterm.css';
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef } from 'react';
 import type { Theme } from '~/lib/stores/theme';
 import { createScopedLogger } from '~/utils/logger';
@@ -34,7 +35,7 @@ export const Terminal = memo(
 
       const terminal = new XTerm({
         cursorBlink: true,
-        convertEol: true,
+        convertEol: false,
         disableStdin: readonly,
         theme: getTerminalTheme(readonly ? { cursor: '#00000000' } : {}),
         fontSize: 12,
@@ -115,6 +116,6 @@ export const Terminal = memo(
       };
     }, []);
 
-    return <div className={className} ref={terminalElementRef} />;
+    return <div className={className} ref={terminalElementRef} onWheel={(e) => e.stopPropagation()} />;
   }),
 );

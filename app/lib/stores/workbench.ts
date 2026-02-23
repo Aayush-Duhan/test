@@ -23,7 +23,7 @@ type Artifacts = MapStore<Record<string, ArtifactState>>;
 export class WorkbenchStore {
   #filesStore = new FilesStore(webcontainer);
   #editorStore = new EditorStore(this.#filesStore);
-  #terminalStore = new TerminalStore(webcontainer);
+  #terminalStore = new TerminalStore();
 
   artifacts: Artifacts = import.meta.hot?.data.artifacts ?? map({});
 

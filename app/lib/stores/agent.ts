@@ -10,11 +10,8 @@ import { atom, type WritableAtom } from 'nanostores';
 export type AgentRunStatus = 'idle' | 'running' | 'paused' | 'finished' | 'failed' | 'cancelled';
 
 export interface ToolTraceEntry {
-    tool: string;
-    args: Record<string, unknown>;
-    exitCode: number | null;
+    command: string;
     success: boolean;
-    duration: number;
     timestamp: number;
 }
 
@@ -221,11 +218,8 @@ export class AgentStore {
             }
             case 'tool-end': {
                 const trace: ToolTraceEntry = {
-                    tool: event.tool as string,
-                    args: {},
-                    exitCode: (event.exitCode as number) ?? null,
+                    command: (event.command as string) ?? '',
                     success: event.success as boolean,
-                    duration: event.duration as number,
                     timestamp: Date.now(),
                 };
                 this.toolTraces.set([...this.toolTraces.get(), trace]);

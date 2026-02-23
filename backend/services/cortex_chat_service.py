@@ -379,49 +379,58 @@ def _stream_cortex(
 
 # ─── Default system prompt for the chat interface ───────────────
 
-from services.tool_definitions import get_tool, get_tools_for_llm
-from services.tool_executor import execute_tool
+from services.pty_service import get_session
 
 
-def _build_chat_system_prompt() -> str:
-    """Build the system prompt with current tool schemas."""
-    tools_json = json.dumps(get_tools_for_llm(), indent=2)
+def _build_chat_system_prompt(chat_id: str, source_language: str = "", uploaded_files_dir: str = "") -> str:
+    """Build the system prompt for the chat interface."""
     return f"""\
-You are a **Database Migration Assistant** powered by Snowflake Cortex.
+You are a Database Migration Assistant on the EY ETHAN platform.
+You help users migrate databases to Snowflake using SnowConvert AI CLI (scai).
 
-Your primary role is to help users migrate databases to Snowflake.
+## RESPONSE FORMAT — STRICT RULES
 
-## Available Tools
-You have access to the following CLI tools that you can execute on the local system:
+You respond in one of two modes. Every response must be EXACTLY one mode:
 
-{tools_json}
-
-## How to Use Tools
-When you need to run a tool, respond with ONLY a JSON object (no other text before or after):
-{{"action": "run_tool", "tool": "<tool_name>", "args": {{...}}, "reasoning": "brief explanation"}}
-
+**MODE A — COMMAND EXECUTION (pure JSON, nothing else)**
+When you need to execute a shell command, respond with ONLY a single JSON object.
+NO text before it. NO text after it. NO markdown fences. JUST the JSON.
 Example:
-{{"action": "run_tool", "tool": "run_command", "args": {{"command": "python --version"}}, "reasoning": "Checking Python version"}}
+{{"action": "run_command", "command": "python --version", "reasoning": "Checking Python version"}}
 
-When you are done with all tool calls and want to reply to the user, respond with plain text only (no JSON).
+**MODE B — CONVERSATION (plain text, no JSON)**
+When you want to talk to the user, respond with plain markdown text.
+Do NOT include any JSON objects in a conversation response.
 
-## CRITICAL: Error Handling
-When a tool fails (non-zero exit code or error output), you MUST:
-1. Analyze the error message carefully
-2. Determine the root cause
-3. Fix the issue and retry with a corrected command (respond with another tool call JSON)
-4. Only give up and respond with plain text if the error is unrecoverable
+## CRITICAL: ONE COMMAND PER RESPONSE
 
-Do NOT stop after a single failure. Always attempt to resolve errors before reporting to the user.
+- You may call **at most ONE command** per response.
+- After you output a command JSON, **STOP IMMEDIATELY**. Do not write anything else.
+- The command will be executed in the user's terminal and you will see the output.
+- You will then see the terminal output and can decide what to do next.
 
-## When NOT to Use Tools
-For general questions, explanations, or conversation, respond with plain text as normal.
-Do NOT wrap plain responses in JSON.
+## CRITICAL: NEVER HALLUCINATE RESULTS
 
-## Capabilities
-1. **Initialize** migration projects using SnowConvert AI CLI (scai).
-2. **Run shell commands** to inspect files, check tool versions, and execute scripts.
-3. Help users through the full migration workflow.
+- You have **NO ability to see command output** until the system gives it to you.
+- NEVER pretend a command succeeded or failed — you do not know until you see the result.
+- If you need to run 3 commands, that takes 3 separate responses.
+
+## Common Commands
+- `scai init <project_path> -l <language>` — Initialize a migration project
+- `scai code add -i <input_path>` — Add source code files to a project
+- `scai code convert` — Convert source code to Snowflake SQL
+- Any other shell command as needed (dir, python, pip, etc.)
+
+## Session Context
+
+The project directory for this session is: **{chat_id}**
+When creating/initializing a migration project, use "{chat_id}" as the project path.
+{f'The source database language is: **{source_language}**.' if source_language else ''}
+{f'The user has uploaded source files at: **{uploaded_files_dir}**.' if uploaded_files_dir else ''}
+
+## Error Handling
+When a command fails, analyze the error and respond with another command to fix and retry.
+Only give up with a plain-text explanation if unrecoverable.
 
 Be specific, actionable, and concise.
 """
@@ -443,7 +452,13 @@ def _call_cortex_buffered(context: SnowflakeContext, messages: list[ChatMessage]
 
 
 def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
-    """Try to parse the LLM response as a tool call JSON.
+    """Try to extract the FIRST valid tool-call JSON from the LLM response.
+
+    Handles several failure modes:
+    - Pure JSON response
+    - Markdown code-fenced JSON
+    - Mixed narrative + JSON (extract first valid JSON object)
+    - Multiple JSONs in one response (take the first one only)
 
     Returns the parsed dict if it's a valid tool call, None otherwise.
     """
@@ -464,24 +479,49 @@ def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
                 json_lines.append(line)
         cleaned = "\n".join(json_lines).strip()
 
-    # Try direct parse
-    try:
-        obj = json.loads(cleaned)
-        if isinstance(obj, dict) and obj.get("action") in ("run_tool", "finish", "pause"):
-            return obj
-    except json.JSONDecodeError:
-        pass
+    # Extract all top-level JSON objects using balanced-brace scanning
+    def _extract_json_objects(s: str) -> list[str]:
+        """Extract all balanced top-level {…} JSON objects from text."""
+        objects: list[str] = []
+        i = 0
+        while i < len(s):
+            if s[i] == "{":
+                depth = 0
+                start = i
+                in_string = False
+                escape_next = False
+                while i < len(s):
+                    ch = s[i]
+                    if escape_next:
+                        escape_next = False
+                        i += 1
+                        continue
+                    if ch == "\\" and in_string:
+                        escape_next = True
+                        i += 1
+                        continue
+                    if ch == '"' and not escape_next:
+                        in_string = not in_string
+                    elif not in_string:
+                        if ch == "{":
+                            depth += 1
+                        elif ch == "}":
+                            depth -= 1
+                            if depth == 0:
+                                objects.append(s[start : i + 1])
+                                break
+                    i += 1
+            i += 1
+        return objects
 
-    # Try to find JSON object in mixed text
-    start = cleaned.find("{")
-    end = cleaned.rfind("}") + 1
-    if start >= 0 and end > start:
+    # Try each extracted JSON object — return the first valid tool call
+    for candidate in _extract_json_objects(cleaned):
         try:
-            obj = json.loads(cleaned[start:end])
-            if isinstance(obj, dict) and obj.get("action") in ("run_tool", "finish", "pause"):
+            obj = json.loads(candidate)
+            if isinstance(obj, dict) and obj.get("action") in ("run_command", "run_tool", "finish", "pause"):
                 return obj
         except json.JSONDecodeError:
-            pass
+            continue
 
     return None
 
@@ -489,13 +529,18 @@ def _try_parse_tool_call(text: str) -> dict[str, Any] | None:
 async def stream_chat_events(
     context: SnowflakeContext,
     messages: list[ChatMessage],
+    *,
+    chat_id: str = "",
+    source_language: str = "",
+    uploaded_files_dir: str = "",
+    session_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Unified chat + agent streaming function.
 
     Handles both plain conversation and tool execution in a single flow:
-    1. Prepend system prompt with tool schemas
-    2. Call LLM — if response is a tool call JSON, execute the tool
-    3. Feed tool results back and let the LLM decide next steps
+    1. Prepend system prompt
+    2. Call LLM — if response is a command JSON, execute via PTY
+    3. Feed terminal output back and let the LLM decide next steps
     4. Repeat until the LLM gives a plain text response
     5. Stream the final text response as delta events
     """
@@ -504,7 +549,7 @@ async def stream_chat_events(
 
     if not has_system:
         messages = [
-            ChatMessage(role="system", content=_build_chat_system_prompt()),
+            ChatMessage(role="system", content=_build_chat_system_prompt(chat_id, source_language, uploaded_files_dir)),
             *messages,
         ]
 
@@ -537,6 +582,20 @@ async def stream_chat_events(
                 yield {"type": "delta", "delta": full_response}
             return
 
+        # If LLM mixed narrative text before the JSON, forward it to the user
+        raw_stripped = full_response.strip()
+        if not raw_stripped.startswith("{"):
+            # Extract text before the first JSON object
+            json_start = full_response.find("{")
+            if json_start > 0:
+                text_before = full_response[:json_start].strip()
+                if text_before:
+                    yield {"type": "delta", "delta": text_before + "\n\n"}
+            logger.info(
+                "LLM mixed narrative text with tool-call JSON (iteration %d).",
+                iteration,
+            )
+
         action = tool_call.get("action")
 
         # ── FINISH ───────────────────────────────────────────────
@@ -551,94 +610,89 @@ async def stream_chat_events(
             yield {"type": "delta", "delta": guidance}
             return
 
-        # ── RUN TOOL ─────────────────────────────────────────────
-        if action == "run_tool":
-            tool_name = tool_call.get("tool", "")
-            tool_args = tool_call.get("args", {})
+        # ── RUN COMMAND (via PTY terminal) ─────────────────────
+        if action in ("run_command", "run_tool"):
+            # Support both new run_command and legacy run_tool format
+            command = tool_call.get("command", "")
+            if not command and action == "run_tool":
+                # Legacy format: build command from tool args
+                tool_args = tool_call.get("args", {})
+                command = tool_args.get("command", "")
+
             reasoning = tool_call.get("reasoning", "")
 
-            tool_def = get_tool(tool_name)
-
-            if tool_def is None:
-                # Unknown tool — inform the LLM and continue
+            if not command:
                 accumulated.append(ChatMessage(role="assistant", content=full_response))
                 accumulated.append(ChatMessage(
                     role="user",
-                    content=f"Error: Unknown tool '{tool_name}'. Available tools: {', '.join(t['name'] for t in get_tools_for_llm())}",
+                    content="Error: Empty command. Please provide a valid shell command.",
                 ))
                 continue
 
-            # Build command
-            try:
-                command = tool_def.build_command(tool_args)
-            except KeyError as exc:
-                accumulated.append(ChatMessage(role="assistant", content=full_response))
-                accumulated.append(ChatMessage(
-                    role="user",
-                    content=f"Error: Missing required argument {exc} for tool '{tool_name}'.",
-                ))
-                continue
-
-            # ── Emit tool execution as formatted text deltas ─────
+            # ── Emit command info as formatted text deltas ─────
             if reasoning:
                 yield {"type": "delta", "delta": f"🤔 {reasoning}\n\n"}
 
             yield {"type": "delta", "delta": f"```\n$ {command}\n"}
 
-            # Execute the tool, streaming output as deltas
-            output_queue: asyncio.Queue[str] = asyncio.Queue()
+            # Execute via PTY terminal
+            logger.info("[chat] Looking up PTY session for session_id=%r", session_id)
+            pty_session = get_session(session_id) if session_id else None
 
-            async def on_output(stream_name: str, line: str) -> None:
-                await output_queue.put(line)
+            if pty_session is None or not pty_session.is_alive:
+                # No terminal — tell the LLM
+                logger.warning(
+                    "[chat] No PTY session found! session_id=%r, pty_session=%s, is_alive=%s",
+                    session_id, pty_session, pty_session.is_alive if pty_session else "N/A",
+                )
+                accumulated.append(ChatMessage(role="assistant", content=full_response))
+                accumulated.append(ChatMessage(
+                    role="user",
+                    content="Error: No active terminal session. The user needs to open the terminal first.",
+                ))
+                yield {"type": "delta", "delta": "```\n⚠️ No active terminal. Please open the terminal panel.\n\n"}
+                continue
 
-            exec_task = asyncio.create_task(
-                execute_tool(tool_def, tool_args, on_output=on_output)
-            )
+            logger.info("[chat] PTY session found, executing command: %s", command[:120])
 
-            # Drain output queue while tool runs
-            while not exec_task.done():
-                try:
-                    line = await asyncio.wait_for(output_queue.get(), timeout=0.1)
-                    yield {"type": "delta", "delta": line}
-                except asyncio.TimeoutError:
-                    continue
+            try:
+                output = await pty_session.execute_command(command)
+                success = True
+                error = None
+                logger.info("[chat] Command completed. Output length=%d chars", len(output))
+                if output:
+                    logger.info("[chat] Output preview: %s", output[:200])
+                else:
+                    logger.warning("[chat] Command returned EMPTY output!")
+            except Exception as exc:
+                logger.error("[chat] PTY command error: %s", exc, exc_info=True)
+                output = ""
+                success = False
+                error = str(exc)
 
-            # Drain remaining
-            while not output_queue.empty():
-                yield {"type": "delta", "delta": await output_queue.get()}
-
-            result = exec_task.result()
-            status = "✓" if result.exit_code == 0 else f"✗ exit code {result.exit_code}"
-            yield {"type": "delta", "delta": f"```\n📋 {status} ({result.duration_seconds:.1f}s)\n\n"}
+            status = "✓" if success else f"✗ error: {error}"
+            yield {"type": "delta", "delta": f"```\n📋 {status}\n\n"}
 
             # ── Feed result back to LLM ──────────────────────────
             accumulated.append(ChatMessage(role="assistant", content=full_response))
 
-            result_text = f"Tool: {tool_name}\nCommand: {command}\nExit Code: {result.exit_code}\n"
+            result_text = f"Command: {command}\n"
 
-            if result.stdout:
-                stdout = result.stdout if len(result.stdout) <= 3000 else (
-                    result.stdout[:1500] + "\n...(truncated)...\n" + result.stdout[-750:]
+            if output:
+                truncated = output if len(output) <= 3000 else (
+                    output[:1500] + "\n...(truncated)...\n" + output[-750:]
                 )
-                result_text += f"\nStdout:\n{stdout}"
+                result_text += f"\nTerminal Output:\n{truncated}"
 
-            if result.stderr:
-                stderr = result.stderr if len(result.stderr) <= 1500 else (
-                    result.stderr[:750] + "\n...(truncated)...\n" + result.stderr[-375:]
-                )
-                result_text += f"\nStderr:\n{stderr}"
-
-            if result.error:
-                result_text += f"\nError: {result.error}"
-
-            # Prompt the LLM to analyze errors
-            if result.exit_code != 0:
+            if error:
+                result_text += f"\nError: {error}"
                 result_text += (
                     "\n\nThe command failed. Analyze the error, determine the fix, "
-                    "and respond with a corrected tool call JSON. "
+                    "and respond with a corrected command JSON. "
                     "If unrecoverable, respond with plain text explaining the issue."
                 )
 
+            logger.info("[chat] Feeding back to LLM: %s", result_text[:300])
             accumulated.append(ChatMessage(role="user", content=result_text))
             continue
 

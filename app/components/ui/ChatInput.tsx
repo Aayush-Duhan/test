@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SendHorizontal, StopCircle, DatabaseZap, PlugZap } from 'lucide-react';
-import { AttachMenu } from './AttachMenu';
-import { LanguageSelector } from './ModelSelector';
+import { SendHorizontal, StopCircle, DatabaseZap, PlugZap, X } from 'lucide-react';
+import { AttachMenu, type UploadedFile } from './AttachMenu';
+import { LanguageSelector, type Language } from './ModelSelector';
 import { Dialog, DialogButton, DialogDescription, DialogRoot, DialogTitle } from './Dialog';
 import type { SnowflakeConnectPayload } from '~/lib/hooks';
 
@@ -18,6 +18,11 @@ interface ChatInputProps {
   snowflakeError?: string;
   onSnowflakeConnect?: (payload: SnowflakeConnectPayload) => Promise<void>;
   onSnowflakeDisconnect?: () => Promise<void>;
+  onLanguageChange?: (language: Language) => void;
+  chatId?: string;
+  uploadedFiles?: UploadedFile[];
+  onFilesUploaded?: (files: UploadedFile[]) => void;
+  onFileRemove?: (fileName: string) => void;
 }
 
 const defaultConnectionForm: SnowflakeConnectPayload = {
@@ -43,6 +48,11 @@ export function ChatInput({
   snowflakeError,
   onSnowflakeConnect,
   onSnowflakeDisconnect,
+  onLanguageChange,
+  chatId,
+  uploadedFiles = [],
+  onFilesUploaded,
+  onFileRemove,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -117,6 +127,26 @@ export function ChatInput({
           />
         </div>
 
+        {uploadedFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+            {uploadedFiles.map((file) => (
+              <span
+                key={file.name}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-300 text-xs border border-blue-500/20"
+              >
+                <span className="max-w-[120px] truncate">{file.name}</span>
+                <button
+                  type="button"
+                  onClick={() => onFileRemove?.(file.name)}
+                  className="hover:text-white transition-colors"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         {(snowflakeError || connectError) && (
           <p className="px-4 pb-1 text-xs text-red-400">{connectError || snowflakeError}</p>
         )}
@@ -127,8 +157,8 @@ export function ChatInput({
 
         <div className="flex items-center justify-between px-3 pb-3 pt-1 gap-2">
           <div className="flex items-center gap-1 flex-wrap">
-            <AttachMenu />
-            <LanguageSelector />
+            <AttachMenu chatId={chatId} onFilesSelected={onFilesUploaded} />
+            <LanguageSelector onLanguageChange={onLanguageChange} />
 
             {snowflakeConnected ? (
               <>

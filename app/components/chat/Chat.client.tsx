@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/react';
 import { type UIMessage, useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useAnimate } from 'framer-motion';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { X, CheckCircle, AlertCircle } from 'lucide-react';
 import { useMessageParser, useShortcuts, useSnapScroll, useSnowflakeConnection, type SnowflakeConnectPayload } from '~/lib/hooks';
@@ -14,6 +14,8 @@ import { cubicEasingFn } from '~/utils/easings';
 import { createScopedLogger, renderLogger } from '~/utils/logger';
 import { BaseChat } from './BaseChat';
 import { getMessageText } from '~/lib/chat/getMessageText';
+import type { Language } from '~/components/ui/ModelSelector';
+import type { UploadedFile } from '~/components/ui/AttachMenu';
 
 const toastAnimation = cssTransition({
   enter: 'animated fadeInRight',
@@ -70,9 +72,22 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   const [input, setInput] = useState('');
   const [didHydrateInitialMessages, setDidHydrateInitialMessages] = useState(false);
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
+  const [sourceLanguage, setSourceLanguage] = useState('Oracle');
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const chatIdRef = useRef(`chat-${crypto.randomUUID().replace(/-/g, '')}`);
+  const chatId = chatIdRef.current;
 
   const { showChat } = useStore(chatStore);
   const [animationScope, animate] = useAnimate();
+
+  const chatTransport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: `/api/chat?protocol=data&source_language=${encodeURIComponent(sourceLanguage)}&id=${encodeURIComponent(chatId)}`,
+        credentials: 'include',
+      }),
+    [sourceLanguage, chatId],
+  );
 
   const {
     messages,
@@ -81,10 +96,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     stop,
     status,
   } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/chat?protocol=data',
-      credentials: 'include',
-    }),
+    transport: chatTransport,
     onError: (error) => {
       logger.error('Request failed\n\n', error);
       toast.error(error.message || 'There was an error processing your request');
@@ -237,6 +249,28 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       snowflakeError={snowflakeError}
       onSnowflakeConnect={onConnectSnowflake}
       onSnowflakeDisconnect={onDisconnectSnowflake}
+      onLanguageChange={(lang: Language) => setSourceLanguage(lang.id)}
+      chatId={chatId}
+      uploadedFiles={uploadedFiles}
+      onFilesUploaded={(files: UploadedFile[]) => {
+        setUploadedFiles((prev) => {
+          const existing = new Set(prev.map((f) => f.name));
+          const newFiles = files.filter((f) => !existing.has(f.name));
+          return [...prev, ...newFiles];
+        });
+
+        // Populate the workbench editor with uploaded files
+        const fileMap: Record<string, { type: 'file'; content: string; isBinary: boolean }> = {};
+        for (const file of files) {
+          fileMap[`/source/${file.name}`] = { type: 'file', content: file.content, isBinary: false };
+        }
+        const currentFiles = workbenchStore.files.get();
+        workbenchStore.files.set({ ...currentFiles, ...fileMap });
+        workbenchStore.setShowWorkbench(true);
+      }}
+      onFileRemove={(fileName: string) => {
+        setUploadedFiles((prev) => prev.filter((f) => f.name !== fileName));
+      }}
     />
   );
 });

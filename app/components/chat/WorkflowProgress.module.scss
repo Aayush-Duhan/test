@@ -1,0 +1,173 @@
+.workflowProgress {
+  border: 1px solid var(--bolt-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin: 0.75rem 0;
+  background: var(--bolt-elements-messages-background);
+}
+
+.workflowHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.06));
+  border-bottom: 1px solid var(--bolt-border);
+}
+
+.workflowIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  font-size: 0.875rem;
+}
+
+.workflowTitle {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--bolt-text-primary);
+}
+
+.workflowSubtitle {
+  font-size: 0.75rem;
+  color: var(--bolt-text-secondary);
+  margin-top: 0.125rem;
+}
+
+/* Steps */
+
+.stepsList {
+  padding: 0.75rem 1rem;
+}
+
+.stepItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  position: relative;
+}
+
+.stepItem:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 0.75rem;
+  top: 2rem;
+  bottom: -0.5rem;
+  width: 2px;
+  background: var(--bolt-border);
+}
+
+.stepItem[data-status='completed']:not(:last-child)::before {
+  background: linear-gradient(180deg, #22c55e, var(--bolt-border));
+}
+
+.stepItem[data-status='running']:not(:last-child)::before {
+  background: linear-gradient(180deg, #6366f1, var(--bolt-border));
+}
+
+.stepIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+  z-index: 1;
+  transition: all 0.3s ease;
+}
+
+.stepIcon[data-status='pending'] {
+  background: var(--bolt-elements-messages-background);
+  border: 2px solid var(--bolt-border);
+  color: var(--bolt-text-tertiary);
+}
+
+.stepIcon[data-status='running'] {
+  background: rgba(99, 102, 241, 0.15);
+  border: 2px solid #6366f1;
+  color: #6366f1;
+}
+
+.stepIcon[data-status='completed'] {
+  background: rgba(34, 197, 94, 0.15);
+  border: 2px solid #22c55e;
+  color: #22c55e;
+}
+
+.stepIcon[data-status='failed'] {
+  background: rgba(239, 68, 68, 0.15);
+  border: 2px solid #ef4444;
+  color: #ef4444;
+}
+
+.stepContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.stepName {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--bolt-text-primary);
+  transition: color 0.2s ease;
+}
+
+.stepItem[data-status='pending'] .stepName {
+  color: var(--bolt-text-tertiary);
+}
+
+.stepItem[data-status='running'] .stepName {
+  color: #6366f1;
+}
+
+.stepItem[data-status='completed'] .stepName {
+  color: var(--bolt-text-secondary);
+}
+
+.stepItem[data-status='failed'] .stepName {
+  color: #ef4444;
+}
+
+.stepMessage {
+  font-size: 0.75rem;
+  color: var(--bolt-text-secondary);
+  margin-top: 0.125rem;
+  opacity: 0.85;
+}
+
+/* Overall status badge */
+
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  margin-left: auto;
+}
+
+.statusBadge[data-status='running'] {
+  background: rgba(99, 102, 241, 0.12);
+  color: #6366f1;
+}
+
+.statusBadge[data-status='completed'] {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+
+.statusBadge[data-status='failed'] {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}

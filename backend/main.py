@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -18,6 +21,7 @@ from schemas import (
     SnowflakeStatusResponse,
 )
 from services.cortex_chat_service import stream_chat_events
+from services.pty_service import PtySession, register_session, unregister_session
 from services.snowflake_session_manager import SnowflakeSessionError, SnowflakeSessionManager
 from services.stream_registry import StreamRegistry
 from stream.data_stream import build_data_stream, patch_response_headers
@@ -31,6 +35,8 @@ session_manager = SnowflakeSessionManager(
     default_cortex_function=settings.default_cortex_function,
 )
 stream_registry = StreamRegistry()
+
+UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
 
 app = FastAPI(
     title="DB Migration Agent",
@@ -96,11 +102,48 @@ async def disconnect_snowflake(request: Request) -> JSONResponse:
     return response
 
 
+@app.post("/api/upload/{chat_id}")
+async def upload_files(chat_id: str, files: list[UploadFile]) -> JSONResponse:
+    """Accept file uploads and save them to uploads/{chat_id}/."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided")
+
+    upload_dir = UPLOADS_DIR / chat_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for f in files:
+        if not f.filename:
+            continue
+
+        # Flatten any nested folder structure — just keep the filename
+        safe_name = Path(f.filename).name
+        dest = upload_dir / safe_name
+        content_bytes = await f.read()
+        dest.write_bytes(content_bytes)
+
+        # Try to read as text for workbench display
+        try:
+            text_content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            text_content = "-- binary file --"
+
+        results.append({
+            "name": safe_name,
+            "path": str(dest),
+            "content": text_content,
+        })
+
+    return JSONResponse(content={"files": results, "upload_dir": str(upload_dir)})
+
+
 @app.post("/api/chat")
 async def chat_endpoint(
     request: Request,
     payload: ChatRequest,
     protocol: str = Query("data"),
+    source_language: str = Query(""),
+    id: str = Query(""),
 ) -> StreamingResponse:
     session_id = request.cookies.get(settings.session_cookie_name)
 
@@ -119,14 +162,25 @@ async def chat_endpoint(
 
     session_manager.touch(context)
 
-    chat_id = payload.id or f"chat-{uuid.uuid4().hex}"
+    chat_id = id or payload.id or f"chat-{uuid.uuid4().hex}"
     stream_registry.register(chat_id)
+
+    # Check if user has uploaded files for this chat
+    uploaded_files_dir = UPLOADS_DIR / chat_id
+    has_uploads = uploaded_files_dir.exists() and any(uploaded_files_dir.iterdir())
 
     async def stream_response() -> AsyncIterator[str]:
         try:
             async for chunk in build_data_stream(
                 request=request,
-                model_events=stream_chat_events(context, payload.messages),
+                model_events=stream_chat_events(
+                    context,
+                    payload.messages,
+                    chat_id=chat_id,
+                    source_language=source_language,
+                    uploaded_files_dir=str(uploaded_files_dir) if has_uploads else "",
+                    session_id=session_id,
+                ),
                 ping_interval_seconds=settings.sse_ping_interval_seconds,
             ):
                 yield chunk
@@ -143,6 +197,78 @@ async def reconnect_stream(chat_id: str) -> Response:
         return Response(status_code=204)
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Terminal PTY WebSocket
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/terminal")
+async def ws_terminal(websocket: WebSocket) -> None:
+    """Spawn a real PTY shell and relay I/O over WebSocket."""
+    await websocket.accept()
+
+    cols = int(websocket.query_params.get("cols", 80))
+    rows = int(websocket.query_params.get("rows", 24))
+
+    # Use session cookie to register this PTY so the agent can find it
+    session_id = websocket.cookies.get(settings.session_cookie_name) or "default"
+
+    import logging as _logging
+    _ws_logger = _logging.getLogger(__name__)
+    _ws_logger.info(
+        "[ws_terminal] cookie_name=%s session_id=%s all_cookies=%s",
+        settings.session_cookie_name,
+        session_id,
+        dict(websocket.cookies),
+    )
+
+    session = PtySession(cols=cols, rows=rows)
+    session.spawn()
+    register_session(session_id, session)
+
+    async def _pty_reader() -> None:
+        """Read PTY output and forward to the WebSocket.
+
+        This is the SINGLE reader of the PTY.  When execute_command()
+        is active, the read() method also copies data into its capture
+        buffer automatically (tap pattern).
+        """
+        try:
+            while session.is_alive:
+                data = await session.read(4096)
+                if data:
+                    await websocket.send_text(data)
+                else:
+                    break
+        except Exception:
+            pass
+
+    reader_task = asyncio.create_task(_pty_reader())
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+
+            # Handle JSON control messages (resize)
+            if raw.startswith("{"):
+                try:
+                    msg = json.loads(raw)
+                    if msg.get("type") == "resize":
+                        session.resize(msg["cols"], msg["rows"])
+                        continue
+                except (ValueError, KeyError):
+                    pass
+
+            # Regular keystrokes
+            session.write(raw)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        reader_task.cancel()
+        unregister_session(session_id)
+        session.close()
 
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,8 @@
 .xterm {
   padding: 1rem;
+  height: 100%;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  overscroll-behavior: contain;
 }

@@ -1,24 +1,26 @@
-import type { WebContainer, WebContainerProcess } from '@webcontainer/api';
 import { atom, type WritableAtom } from 'nanostores';
 import type { ITerminal } from '~/types/terminal';
-import { newShellProcess } from '~/utils/shell';
 import { coloredText } from '~/utils/terminal';
 
+const BACKEND_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+const BACKEND_PORT = '8000';
+
+interface TerminalSession {
+  terminal: ITerminal;
+  ws: WebSocket;
+}
+
 export class TerminalStore {
-  #webcontainer: Promise<WebContainer>;
-  #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess }> = [];
+  #terminals: TerminalSession[] = [];
 
   // Agent terminal state
   #agentTerminal: ITerminal | null = null;
   #agentWs: WebSocket | null = null;
-  #agentRunId: WritableAtom<string | null> = atom(null);
 
   showTerminal: WritableAtom<boolean> = import.meta.hot?.data.showTerminal ?? atom(false);
   agentRunId: WritableAtom<string | null> = import.meta.hot?.data.agentRunId ?? atom(null);
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
-    this.#webcontainer = webcontainerPromise;
-
+  constructor() {
     if (import.meta.hot) {
       import.meta.hot.data.showTerminal = this.showTerminal;
       import.meta.hot.data.agentRunId = this.agentRunId;
@@ -29,19 +31,52 @@ export class TerminalStore {
     this.showTerminal.set(value !== undefined ? value : !this.showTerminal.get());
   }
 
-  async attachTerminal(terminal: ITerminal) {
+  attachTerminal(terminal: ITerminal) {
+    const cols = terminal.cols ?? 80;
+    const rows = terminal.rows ?? 24;
+    const wsUrl = `ws://${BACKEND_HOST}:${BACKEND_PORT}/ws/terminal?cols=${cols}&rows=${rows}`;
+
+    terminal.write('\x1b[90mConnecting to terminal...\x1b[0m\r\n');
+
     try {
-      const shellProcess = await newShellProcess(await this.#webcontainer, terminal);
-      this.#terminals.push({ terminal, process: shellProcess });
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        terminal.write('\x1b[2J\x1b[H'); // clear screen and move cursor home
+      };
+
+      ws.onmessage = (event) => {
+        terminal.write(event.data);
+      };
+
+      ws.onerror = () => {
+        terminal.write(coloredText.red('\r\n⚠ Terminal connection error\r\n'));
+      };
+
+      ws.onclose = (event) => {
+        terminal.write(`\r\n\x1b[90m─ Terminal disconnected (${event.code})\x1b[0m\r\n`);
+        // Remove from tracked sessions
+        this.#terminals = this.#terminals.filter((s) => s.ws !== ws);
+      };
+
+      // Forward user keystrokes to the PTY
+      terminal.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(data);
+        }
+      });
+
+      this.#terminals.push({ terminal, ws });
     } catch (error: any) {
-      terminal.write(coloredText.red('Failed to spawn shell\n\n') + error.message);
-      return;
+      terminal.write(coloredText.red(`Failed to connect: ${error.message}\r\n`));
     }
   }
 
   onTerminalResize(cols: number, rows: number) {
-    for (const { process } of this.#terminals) {
-      process.resize({ cols, rows });
+    for (const { ws } of this.#terminals) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      }
     }
   }
 
@@ -49,20 +84,13 @@ export class TerminalStore {
   // Agent Terminal (WebSocket-backed)
   // -------------------------------------------------------------------
 
-  /**
-   * Connect a terminal to the agent's WebSocket output stream.
-   * This replaces the WebContainer shell for agent-driven terminal display.
-   */
   connectAgentTerminal(terminal: ITerminal, runId: string) {
-    // Disconnect any existing agent terminal
     this.disconnectAgentTerminal();
 
     this.#agentTerminal = terminal;
     this.agentRunId.set(runId);
 
-    const backendHost = window.location.hostname;
-    const backendPort = '8000';
-    const wsUrl = `ws://${backendHost}:${backendPort}/ws/terminal/${runId}`;
+    const wsUrl = `ws://${BACKEND_HOST}:${BACKEND_PORT}/ws/terminal/${runId}`;
 
     terminal.write(`\x1b[90mConnecting to agent run ${runId}...\x1b[0m\r\n`);
 
@@ -81,16 +109,13 @@ export class TerminalStore {
           const data = msg.data as string;
 
           if (stream === 'stderr') {
-            // Stderr in red
             terminal.write(`\x1b[31m${data}\x1b[0m`);
           } else if (stream === 'system') {
-            // System messages in dim
             terminal.write(`\x1b[90m${data}\x1b[0m`);
           } else {
             terminal.write(data);
           }
         } catch {
-          // Raw text fallback
           terminal.write(event.data);
         }
       };
@@ -108,9 +133,6 @@ export class TerminalStore {
     }
   }
 
-  /**
-   * Disconnect the agent terminal WebSocket.
-   */
   disconnectAgentTerminal() {
     if (this.#agentWs) {
       this.#agentWs.close();
@@ -120,9 +142,6 @@ export class TerminalStore {
     this.agentRunId.set(null);
   }
 
-  /**
-   * Write directly to the agent terminal (used by SSE event handler).
-   */
   writeToAgentTerminal(data: string) {
     if (this.#agentTerminal) {
       this.#agentTerminal.write(data);

@@ -28,3 +28,16 @@ dist-ssr
 *.vars
 .wrangler
 _worker.bundle
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+uv.lock
+
+# Backend runtime artifacts
+uploads/
+projects/
+outputs/

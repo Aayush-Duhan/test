@@ -25,15 +25,10 @@ class RunStatus(str, Enum):
 
 @dataclass
 class ToolTrace:
-    """Record of a single tool invocation within a run."""
+    """Record of a single command execution within a run."""
 
-    tool_name: str
-    args: dict[str, Any]
     command: str
-    exit_code: int | None = None
-    stdout: str = ""
-    stderr: str = ""
-    duration_seconds: float = 0.0
+    output: str = ""
     error: str | None = None
     success: bool = False
     timestamp: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -54,9 +49,6 @@ class AgentRun:
     updated_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
     guidance: str | None = None  # LLM guidance shown on pause
     abort_event: asyncio.Event = field(default_factory=asyncio.Event)
-
-    # WebSocket connections subscribed to this run's terminal output
-    ws_connections: list[Any] = field(default_factory=list)
 
     def touch(self) -> None:
         self.updated_at = datetime.now(tz=timezone.utc)
@@ -141,20 +133,3 @@ class AgentRunStore:
         if session_id:
             runs = [r for r in runs if r.session_id == session_id]
         return sorted(runs, key=lambda r: r.created_at, reverse=True)
-
-    def add_ws_connection(self, run_id: str, ws: Any) -> bool:
-        with self._lock:
-            run = self._runs.get(run_id)
-            if run is None:
-                return False
-            run.ws_connections.append(ws)
-            return True
-
-    def remove_ws_connection(self, run_id: str, ws: Any) -> None:
-        with self._lock:
-            run = self._runs.get(run_id)
-            if run:
-                try:
-                    run.ws_connections.remove(ws)
-                except ValueError:
-                    pass

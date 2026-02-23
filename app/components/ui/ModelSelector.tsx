@@ -8,21 +8,20 @@ interface Language {
 }
 
 const languages: Language[] = [
-  { id: 'teradata', name: 'Teradata' },
-  { id: 'oracle', name: 'Oracle' },
-  { id: 'sql-server', name: 'SQL Server' },
-  { id: 'azure-synapse', name: 'Azure Synapse' },
-  { id: 'google-bigquery', name: 'Google BigQuery' },
-  { id: 'amazon-redshift', name: 'Amazon Redshift' },
-  { id: 'databricks-sql', name: 'Databricks SQL' },
-  { id: 'greenplum', name: 'Greenplum' },
-  { id: 'sybase-iq', name: 'Sybase IQ' },
-  { id: 'postgresql', name: 'PostgreSQL' },
-  { id: 'netezza', name: 'Netezza' },
-  { id: 'spark-sql', name: 'Spark SQL' },
-  { id: 'vertica', name: 'Vertica' },
-  { id: 'hive', name: 'Hive' },
-  { id: 'ibm-db2', name: 'IBM DB2' },
+  { id: 'Teradata', name: 'Teradata' },
+  { id: 'Oracle', name: 'Oracle' },
+  { id: 'SqlServer', name: 'SQL Server' },
+  { id: 'BigQuery', name: 'Google BigQuery' },
+  { id: 'Redshift', name: 'Amazon Redshift' },
+  { id: 'Databricks', name: 'Databricks SQL' },
+  { id: 'Greenplum', name: 'Greenplum' },
+  { id: 'Sybase', name: 'Sybase IQ' },
+  { id: 'Postgresql', name: 'PostgreSQL' },
+  { id: 'Netezza', name: 'Netezza' },
+  { id: 'Spark', name: 'Spark SQL' },
+  { id: 'Vertica', name: 'Vertica' },
+  { id: 'Hive', name: 'Hive' },
+  { id: 'Db2', name: 'IBM DB2' },
 ];
 
 interface LanguageSelectorProps {
@@ -30,7 +29,7 @@ interface LanguageSelectorProps {
   onLanguageChange?: (language: Language) => void;
 }
 
-export function LanguageSelector({ selectedLanguage = 'postgresql', onLanguageChange }: LanguageSelectorProps) {
+export function LanguageSelector({ selectedLanguage = 'Oracle', onLanguageChange }: LanguageSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [selected, setSelected] = useState(languages.find((l) => l.id === selectedLanguage) || languages[0]);
 

@@ -2,9 +2,9 @@
 
 Implements the LLM-driven tool orchestration loop:
   1. Send context + tool schemas to Cortex LLM
-  2. LLM decides: run_tool / pause / finish
-  3. Execute tool via tool_executor, stream output
-  4. On failure: LLM analyses error → auto-fix if allowlisted → retry (budget)
+  2. LLM decides: run_command / pause / finish
+  3. Execute command in the user's PTY terminal, capture output
+  4. On failure: LLM analyses error → retry (budget)
   5. On pause:  persist state, return guidance
   6. Loop until finish/pause/cancel
 
@@ -21,9 +21,8 @@ from typing import Any
 
 from services.agent_run_store import AgentRun, RunStatus, ToolTrace
 from services.cortex_chat_service import _extract_text_from_message, _stream_cortex
+from services.pty_service import get_session
 from services.snowflake_session_manager import SnowflakeContext
-from services.tool_definitions import get_tool, get_tools_for_llm
-from services.tool_executor import OutputCallback, ToolResult, execute_tool
 from schemas import ChatMessage
 
 logger = logging.getLogger(__name__)
@@ -34,18 +33,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 AGENT_SYSTEM_PROMPT = """\
-You are an AI agent that orchestrates database migration tasks using CLI tools.
-
-## Available Tools
-{tools_json}
+You are an AI agent that orchestrates database migration tasks by running shell commands in the user's terminal.
 
 ## Instructions
-- Analyze the user's request and decide which tool to run next.
-- You MUST respond with a JSON object in one of these formats:
+- Analyze the user's request and decide what to do next.
+- You MUST respond with ONLY a single JSON object (no extra text) in one of these formats:
 
-### To run a tool:
+### To run a shell command:
 ```json
-{{"action": "run_tool", "tool": "<tool_name>", "args": {{...}}, "reasoning": "Why this tool"}}
+{{"action": "run_command", "command": "<full shell command>", "reasoning": "Why this command"}}
 ```
 
 ### To pause and ask for user guidance:
@@ -58,12 +54,12 @@ You are an AI agent that orchestrates database migration tasks using CLI tools.
 {{"action": "finish", "summary": "What was accomplished"}}
 ```
 
-## Context
-- After each tool execution, you will receive the tool's output (stdout, stderr, exit code).
-- If a tool fails, analyze the error and decide whether to retry with different arguments, use a different tool, or pause for user input.
-- Always explain your reasoning.
-- Follow the migration sequence defined by the user.
-- Be concise in your responses.
+## Rules
+- ONLY output a single JSON object. No narrative text, no explanations outside JSON.
+- After each command execution you will receive the terminal output.
+- If a command fails, analyze the error and decide whether to retry with a different command, or pause for user input.
+- Always explain your reasoning inside the JSON "reasoning" field.
+- Be concise.
 """
 
 
@@ -78,10 +74,8 @@ def _build_agent_messages(
     """Build the message history for the LLM, including tool traces."""
     messages: list[ChatMessage] = []
 
-    # System prompt with tool schemas
-    tools_json = json.dumps(get_tools_for_llm(), indent=2)
-    system_prompt = AGENT_SYSTEM_PROMPT.format(tools_json=tools_json)
-    messages.append(ChatMessage(role="system", content=system_prompt))
+    # System prompt
+    messages.append(ChatMessage(role="system", content=AGENT_SYSTEM_PROMPT))
 
     # User messages
     for msg in user_messages:
@@ -89,27 +83,24 @@ def _build_agent_messages(
 
     # Replay tool traces as assistant/user message pairs
     for trace in run.tool_traces:
-        # Assistant decided to run the tool
+        # Assistant decided to run the command
         messages.append(ChatMessage(
             role="assistant",
             content=json.dumps({
-                "action": "run_tool",
-                "tool": trace.tool_name,
-                "args": trace.args,
+                "action": "run_command",
+                "command": trace.command,
             }),
         ))
 
-        # Tool result as user message
-        result_text = f"Tool: {trace.tool_name}\nCommand: {trace.command}\nExit Code: {trace.exit_code}\n"
+        # Command result as user message
+        result_text = f"Command: {trace.command}\n"
 
-        if trace.stdout:
+        if trace.output:
             # Truncate very long outputs
-            stdout = trace.stdout if len(trace.stdout) <= 2000 else trace.stdout[:1000] + "\n...(truncated)...\n" + trace.stdout[-500:]
-            result_text += f"\nStdout:\n{stdout}"
-
-        if trace.stderr:
-            stderr = trace.stderr if len(trace.stderr) <= 1000 else trace.stderr[:500] + "\n...(truncated)...\n" + trace.stderr[-250:]
-            result_text += f"\nStderr:\n{stderr}"
+            output = trace.output if len(trace.output) <= 3000 else (
+                trace.output[:1500] + "\n...(truncated)...\n" + trace.output[-500:]
+            )
+            result_text += f"\nTerminal Output:\n{output}"
 
         if trace.error:
             result_text += f"\nError: {trace.error}"
@@ -124,12 +115,10 @@ def _parse_llm_decision(text: str) -> dict[str, Any]:
 
     The LLM may wrap the JSON in markdown code blocks; we handle that.
     """
-    # Strip markdown code fences if present
     cleaned = text.strip()
 
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
-        # Remove first line (```json) and last line (```)
         json_lines = []
         in_block = False
         for line in lines:
@@ -172,27 +161,6 @@ def _call_cortex_sync(
 
 
 # ---------------------------------------------------------------------------
-# WebSocket broadcasting
-# ---------------------------------------------------------------------------
-
-async def _broadcast_to_ws(run: AgentRun, stream_name: str, data: str) -> None:
-    """Send terminal output to all WebSocket subscribers of this run."""
-    dead: list[Any] = []
-
-    for ws in run.ws_connections:
-        try:
-            await ws.send_json({"stream": stream_name, "data": data})
-        except Exception:
-            dead.append(ws)
-
-    for ws in dead:
-        try:
-            run.ws_connections.remove(ws)
-        except ValueError:
-            pass
-
-
-# ---------------------------------------------------------------------------
 # Main orchestration loop
 # ---------------------------------------------------------------------------
 
@@ -205,9 +173,8 @@ async def run_agent_orchestrator(
 
     Events emitted:
         - ``{"type": "agent-thinking", "text": "..."}``
-        - ``{"type": "tool-start", "tool": "...", "args": {...}}``
-        - ``{"type": "tool-output", "stream": "...", "data": "..."}``
-        - ``{"type": "tool-end", "tool": "...", "exitCode": ..., "success": bool}``
+        - ``{"type": "tool-start", "command": "..."}``
+        - ``{"type": "tool-end", "command": "...", "success": bool}``
         - ``{"type": "agent-decision", "decision": {...}}``
         - ``{"type": "agent-pause", "guidance": "..."}``
         - ``{"type": "agent-finish", "summary": "..."}``
@@ -270,104 +237,73 @@ async def run_agent_orchestrator(
             return
 
         # ---------------------------------------------------------------
-        # RUN TOOL
+        # RUN COMMAND (via PTY terminal)
         # ---------------------------------------------------------------
-        if action == "run_tool":
-            tool_name = decision.get("tool", "")
-            tool_args = decision.get("args", {})
+        if action == "run_command":
+            command = decision.get("command", "")
 
-            tool = get_tool(tool_name)
-            if tool is None:
-                yield {"type": "agent-error", "error": f"Unknown tool: {tool_name}"}
-                # Add a fake trace so the LLM knows
+            if not command:
+                yield {"type": "agent-error", "error": "Empty command from LLM"}
                 run.add_trace(ToolTrace(
-                    tool_name=tool_name,
-                    args=tool_args,
                     command="",
-                    error=f"Unknown tool: {tool_name}",
+                    error="Empty command",
                 ))
                 continue
 
-            yield {"type": "tool-start", "tool": tool_name, "args": tool_args}
+            # Find the user's PTY session
+            pty_session = get_session(run.session_id)
 
-            # Build the output callback that streams to both SSE and WebSocket
-            sse_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            if pty_session is None or not pty_session.is_alive:
+                error_msg = "No active terminal session. Please open the terminal first."
+                yield {"type": "agent-error", "error": error_msg}
+                run.status = RunStatus.PAUSED
+                run.guidance = error_msg
+                yield {"type": "agent-pause", "guidance": error_msg}
+                return
 
-            async def on_output(stream_name: str, line: str) -> None:
-                event = {"type": "tool-output", "stream": stream_name, "data": line}
-                await sse_queue.put(event)
-                await _broadcast_to_ws(run, stream_name, line)
+            yield {"type": "tool-start", "command": command}
 
-            # Run the tool in a task so we can yield SSE events as they arrive
+            # Execute the command in the PTY
             try:
-                command = tool.build_command(tool_args)
-            except KeyError as exc:
-                yield {"type": "agent-error", "error": f"Missing argument for {tool_name}: {exc}"}
-                run.add_trace(ToolTrace(
-                    tool_name=tool_name,
-                    args=tool_args,
-                    command="",
-                    error=f"Missing argument: {exc}",
-                ))
-                continue
-
-            exec_task = asyncio.create_task(
-                execute_tool(tool, tool_args, on_output=on_output, abort_event=run.abort_event)
-            )
-
-            # Drain the SSE queue while the tool runs
-            while not exec_task.done():
-                try:
-                    event = await asyncio.wait_for(sse_queue.get(), timeout=0.1)
-                    yield event
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining events
-            while not sse_queue.empty():
-                yield await sse_queue.get()
-
-            result: ToolResult = exec_task.result()
+                output = await pty_session.execute_command(command)
+                success = True
+                error = None
+            except Exception as exc:
+                logger.error("PTY command execution error: %s", exc)
+                output = ""
+                success = False
+                error = str(exc)
 
             # Record trace
             trace = ToolTrace(
-                tool_name=tool_name,
-                args=tool_args,
                 command=command,
-                exit_code=result.exit_code,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                duration_seconds=result.duration_seconds,
-                error=result.error,
-                success=result.exit_code == 0 and not result.timed_out and not result.aborted,
+                output=output,
+                error=error,
+                success=success,
             )
             run.add_trace(trace)
 
             yield {
                 "type": "tool-end",
-                "tool": tool_name,
-                "exitCode": result.exit_code,
-                "success": trace.success,
-                "duration": result.duration_seconds,
+                "command": command,
+                "success": success,
             }
 
             # -------------------------------------------------------
             # Error handling: retry logic
             # -------------------------------------------------------
-            if not trace.success:
+            if not success:
                 if run.retries_used >= run.retry_budget:
                     guidance = (
-                        f"Tool '{tool_name}' failed and retry budget is exhausted "
+                        f"Command failed and retry budget is exhausted "
                         f"({run.retries_used}/{run.retry_budget}). "
-                        f"Error: {result.error or result.stderr[:200]}"
+                        f"Error: {error}"
                     )
                     run.status = RunStatus.PAUSED
                     run.guidance = guidance
                     yield {"type": "agent-pause", "guidance": guidance}
                     return
 
-                # The LLM will see the failure in the next iteration
-                # and can decide to retry or pause.
                 run.retries_used += 1
 
             continue
@@ -375,8 +311,6 @@ async def run_agent_orchestrator(
         # Unknown action
         yield {"type": "agent-error", "error": f"Unknown action: {action}"}
         run.add_trace(ToolTrace(
-            tool_name="unknown",
-            args={},
             command="",
             error=f"Unknown action from LLM: {action}",
         ))
