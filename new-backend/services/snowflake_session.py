@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from threading import Lock, RLock
 from typing import Any
 
-from schemas import SnowflakeConnectRequest, SnowflakeStatusResponse
+from schemas import SnowflakeConnectRequest, SnowflakeModelDefaults, SnowflakeStatusResponse
 
 
 class SnowflakeSessionError(Exception):
@@ -59,8 +59,8 @@ class SnowflakeSessionManager:
         except Exception as exc:
             raise SnowflakeSessionError(f"Unable to connect to Snowflake: {exc}") from exc
 
-        model = self._default_model
-        cortex_function = self._default_cortex_function
+        model = payload.model or self._default_model
+        cortex_function = payload.cortex_function or self._default_cortex_function
 
         model_cfg = SnowflakeModelConfig(
             model=model,
@@ -131,12 +131,18 @@ class SnowflakeSessionManager:
         self.touch(context)
         return SnowflakeStatusResponse(
             connected=True,
+            expiresAt=context.expires_at,
+            sessionId=context.session_id,
+            modelDefaults=SnowflakeModelDefaults(
+                model=context.model_config.model,
+                cortexFunction=context.model_config.cortex_function,
+            ),
         )
 
     def _build_connection_parameters(self, payload: SnowflakeConnectRequest) -> dict[str, Any]:
         return {
             "account": payload.account,
-            "user": payload.username,
+            "user": payload.user,
             "authenticator": payload.authenticator,
             "role": payload.role,
             "warehouse": payload.warehouse,

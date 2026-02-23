@@ -1,0 +1,434 @@
+.wizard {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+    gap: 2rem;
+}
+
+/* ── Step indicator ── */
+.stepIndicator {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    width: 100%;
+    max-width: 520px;
+}
+
+.stepDot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.25s ease;
+    flex-shrink: 0;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.stepDot.active {
+    border-color: #2BA6FF;
+    background: rgba(43, 166, 255, 0.15);
+    color: #2BA6FF;
+    box-shadow: 0 0 16px rgba(43, 166, 255, 0.2);
+}
+
+.stepDot.completed {
+    border-color: #22C55E;
+    background: rgba(34, 197, 94, 0.15);
+    color: #22C55E;
+}
+
+.stepLine {
+    flex: 1;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.08);
+    transition: background 0.25s ease;
+}
+
+.stepLine.completed {
+    background: rgba(34, 197, 94, 0.4);
+}
+
+/* ── Step content area ── */
+.stepContent {
+    width: 100%;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+}
+
+.stepTitle {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 0.25rem;
+    letter-spacing: -0.01em;
+}
+
+.stepDescription {
+    font-size: 0.95rem;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 1.5rem;
+}
+
+/* ── Language cards ── */
+.languageGrid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+}
+
+.languageCard {
+    display: flex;
+    align-items: center;
+    gap: 0.875rem;
+    padding: 1rem 1.25rem;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.languageCard:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.languageCard.selected {
+    border-color: #2BA6FF;
+    background: rgba(43, 166, 255, 0.08);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(43, 166, 255, 0.08);
+}
+
+.languageIcon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.languageCard.selected .languageIcon {
+    background: rgba(43, 166, 255, 0.15);
+}
+
+.languageName {
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.languageDesc {
+    font-size: 0.8rem;
+    opacity: 0.5;
+    margin-top: 2px;
+}
+
+/* ── Dropzone ── */
+.dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 2.5rem 2rem;
+    border-radius: 12px;
+    border: 2px dashed rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.02);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+}
+
+.dropzone:hover,
+.dropzone.dragOver {
+    border-color: #2BA6FF;
+    background: rgba(43, 166, 255, 0.04);
+}
+
+.dropzoneIcon {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.dropzoneText {
+    font-size: 0.9rem;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.dropzoneAccent {
+    color: #2BA6FF;
+    font-weight: 500;
+}
+
+.dropzoneHint {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.25);
+}
+
+/* ── File list ── */
+.fileList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.fileChip {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.fileChipName {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fileChipSize {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.3);
+    flex-shrink: 0;
+}
+
+.fileChipRemove {
+    flex-shrink: 0;
+    cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+    color: #fff;
+    background: none;
+    border: none;
+    padding: 2px;
+    display: flex;
+}
+
+.fileChipRemove:hover {
+    opacity: 1;
+    color: #EF4444;
+}
+
+/* ── Connection form ── */
+.connectionForm {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+.connectionField {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.connectionField.fullWidth {
+    grid-column: 1 / -1;
+}
+
+.connectionLabel {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.connectionInput {
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.04);
+    color: #fff;
+    font-size: 0.9rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.connectionInput:focus {
+    border-color: #2BA6FF;
+}
+
+.connectionInput::placeholder {
+    color: rgba(255, 255, 255, 0.2);
+}
+
+.connectionStatus {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+}
+
+.connectionStatus.connected {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    color: #22C55E;
+}
+
+.connectionStatus.disconnected {
+    background: rgba(239, 68, 68, 0.06);
+    border: 1px solid rgba(239, 68, 68, 0.15);
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* ── Summary ── */
+.summaryCard {
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    overflow: hidden;
+}
+
+.summaryRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.875rem 1.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.summaryRow:last-child {
+    border-bottom: none;
+}
+
+.summaryLabel {
+    font-size: 0.85rem;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.summaryValue {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #fff;
+}
+
+.summaryBadge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.summaryBadge.success {
+    background: rgba(34, 197, 94, 0.12);
+    color: #22C55E;
+}
+
+.summaryBadge.warning {
+    background: rgba(234, 179, 8, 0.12);
+    color: #EAB308;
+}
+
+.summaryBadge.error {
+    background: rgba(239, 68, 68, 0.1);
+    color: #EF4444;
+}
+
+/* ── Navigation buttons ── */
+.navButtons {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    margin-top: auto;
+    padding-top: 1.5rem;
+}
+
+.navBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.5rem;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.navBtn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.navBtnBack {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.navBtnBack:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.navBtnNext {
+    background: #2BA6FF;
+    color: #fff;
+}
+
+.navBtnNext:hover:not(:disabled) {
+    background: #1a96f0;
+    box-shadow: 0 4px 20px rgba(43, 166, 255, 0.3);
+}
+
+.navBtnStart {
+    background: linear-gradient(135deg, #2BA6FF, #0d8bf0);
+    color: #fff;
+    padding: 0.75rem 2rem;
+    font-size: 0.95rem;
+}
+
+.navBtnStart:hover:not(:disabled) {
+    box-shadow: 0 4px 24px rgba(43, 166, 255, 0.35);
+    transform: translateY(-1px);
+}
+
+.skipBtn {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0.5rem;
+    transition: color 0.2s;
+}
+
+.skipBtn:hover {
+    color: rgba(255, 255, 255, 0.7);
+}

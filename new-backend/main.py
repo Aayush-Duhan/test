@@ -17,12 +17,13 @@ import logging
 import os
 import shutil
 import uuid
+from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from config import get_settings
 from schemas import (
@@ -73,35 +74,65 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # ============================================================================
+# Cookie helpers
+# ============================================================================
+
+def _ensure_session_id(request: Request) -> str:
+    """Read session_id from cookie or generate a new one."""
+    return request.cookies.get(settings.session_cookie_name) or str(uuid.uuid4())
+
+
+def _set_session_cookie(response: JSONResponse, session_id: str) -> None:
+    """Set the session cookie on the response."""
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=session_id,
+        max_age=settings.session_ttl_days * 86400,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+        path="/",
+    )
+
+
+# ============================================================================
 # Snowflake session endpoints
 # ============================================================================
 
 @app.post("/api/snowflake/connect", response_model=SnowflakeConnectResponse)
-async def connect_snowflake(payload: SnowflakeConnectRequest):
+async def connect_snowflake(request: Request, payload: SnowflakeConnectRequest):
     """Establish a Snowflake session."""
-    import uuid as _uuid
-    session_id = str(_uuid.uuid4())
+    from datetime import timedelta, timezone
+    session_id = _ensure_session_id(request)
     sf_manager.create_or_replace(session_id, payload)
-    return SnowflakeConnectResponse(
-        session_id=session_id,
-        status="connected",
-        database=payload.database or None,
-        schema_name=payload.schema_name or None,
+
+    response_payload = SnowflakeConnectResponse(
+        connected=True,
+        expiresAt=datetime.now(tz=timezone.utc) + timedelta(days=settings.session_ttl_days),
+        sessionId=session_id,
     )
+    response = JSONResponse(content=response_payload.model_dump(mode="json"))
+    _set_session_cookie(response, session_id)
+    return response
 
 
-@app.get("/api/snowflake/status")
-async def snowflake_status(session_id: str = ""):
+@app.get("/api/snowflake/status", response_model=SnowflakeStatusResponse)
+async def snowflake_status(request: Request):
     """Check Snowflake connection status."""
-    return sf_manager.build_status(session_id or None)
+    session_id = request.cookies.get(settings.session_cookie_name)
+    return sf_manager.build_status(session_id)
 
 
 @app.post("/api/snowflake/disconnect")
-async def disconnect_snowflake(session_id: str = ""):
+async def disconnect_snowflake(request: Request):
     """Disconnect Snowflake session."""
+    session_id = request.cookies.get(settings.session_cookie_name)
+    disconnected = False
     if session_id:
-        sf_manager.disconnect(session_id)
-    return {"status": "disconnected"}
+        disconnected = sf_manager.disconnect(session_id)
+    response = JSONResponse(content={"disconnected": disconnected})
+    response.delete_cookie(settings.session_cookie_name, path="/")
+    return response
 
 
 # ============================================================================
@@ -328,3 +359,12 @@ async def terminal_websocket(ws: WebSocket):
     finally:
         from services.pty_service import unregister_session
         unregister_session(session_id)
+
+
+# ============================================================================
+# Server entry point
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -16,6 +16,7 @@ import { BaseChat } from './BaseChat';
 import { getMessageText } from '~/lib/chat/getMessageText';
 import type { Language } from '~/components/ui/ModelSelector';
 import type { UploadedFile } from '~/components/ui/AttachMenu';
+import type { WizardConfig } from '~/components/wizard/SetupWizard';
 
 const toastAnimation = cssTransition({
   enter: 'animated fadeInRight',
@@ -218,6 +219,51 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     toast.info('Snowflake disconnected');
   };
 
+  const onWizardComplete = async (config: WizardConfig) => {
+    // Store uploaded files in workbench
+    const fileMap: Record<string, { type: 'file'; content: string; isBinary: boolean }> = {};
+    const uploadedFromWizard: UploadedFile[] = [];
+
+    for (const f of config.files) {
+      fileMap[`/source/${f.name}`] = { type: 'file', content: f.content, isBinary: false };
+      uploadedFromWizard.push({ name: f.name, path: `/source/${f.name}`, content: f.content });
+    }
+
+    const currentFiles = workbenchStore.files.get();
+    workbenchStore.files.set({ ...currentFiles, ...fileMap });
+    workbenchStore.setShowWorkbench(true);
+    setUploadedFiles(uploadedFromWizard);
+    setSourceLanguage(config.language);
+
+    // Upload files to backend
+    try {
+      const formData = new FormData();
+      for (const f of config.files) {
+        formData.append('files', new Blob([f.content], { type: 'text/plain' }), f.name);
+      }
+      await fetch(`/api/upload/${chatId}`, { method: 'POST', body: formData, credentials: 'include' });
+
+      if (config.mappingFile) {
+        const mappingForm = new FormData();
+        mappingForm.append('files', new Blob([config.mappingFile.content], { type: 'text/csv' }), config.mappingFile.name);
+        await fetch(`/api/upload/${chatId}`, { method: 'POST', body: mappingForm, credentials: 'include' });
+      }
+    } catch (err) {
+      logger.error('File upload failed', err);
+    }
+
+    // Trigger chat start
+    await runAnimation();
+
+    // Send initial migration message
+    const fileNames = config.files.map((f) => f.name).join(', ');
+    const mappingInfo = config.mappingFile ? `Schema mapping: ${config.mappingFile.name}` : 'No schema mapping';
+    const prompt = `Migrate the following ${config.language} files to Snowflake:\n\nFiles: ${fileNames}\n${mappingInfo}\n\nPlease start the automated migration workflow.`;
+
+    await sendChatMessage({ text: prompt });
+    setInput('');
+  };
+
   const [messageRef, scrollRef] = useSnapScroll();
 
   const renderedMessages: UIMessage[] = messages.map((message, index) => {
@@ -250,6 +296,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       onSnowflakeConnect={onConnectSnowflake}
       onSnowflakeDisconnect={onDisconnectSnowflake}
       onLanguageChange={(lang: Language) => setSourceLanguage(lang.id)}
+      onWizardComplete={onWizardComplete}
       chatId={chatId}
       uploadedFiles={uploadedFiles}
       onFilesUploaded={(files: UploadedFile[]) => {

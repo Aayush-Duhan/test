@@ -1,11 +1,6 @@
-"""
-Pydantic schemas for API request/response payloads.
-"""
-
-from __future__ import annotations
-
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================================
@@ -31,26 +26,34 @@ class ChatRequest(BaseModel):
 
 class SnowflakeConnectRequest(BaseModel):
     account: str
-    username: str
+    user: str
     role: str = ""
     warehouse: str = ""
     database: str = ""
     schema_name: str = Field("", alias="schema")
     authenticator: str = "externalbrowser"
+    model: str | None = None
+    cortex_function: str | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SnowflakeModelDefaults(BaseModel):
+    model: str
+    cortexFunction: str
 
 
 class SnowflakeConnectResponse(BaseModel):
-    session_id: str
-    status: str
-    database: Optional[str] = None
-    schema_name: Optional[str] = None
+    connected: bool = True
+    expiresAt: Optional[datetime] = None
+    sessionId: str = ""
 
 
 class SnowflakeStatusResponse(BaseModel):
     connected: bool
-    database: Optional[str] = None
-    schema_name: Optional[str] = None
-    warehouse: Optional[str] = None
+    expiresAt: Optional[datetime] = None
+    sessionId: Optional[str] = None
+    modelDefaults: Optional[SnowflakeModelDefaults] = None
 
 
 # ============================================================================

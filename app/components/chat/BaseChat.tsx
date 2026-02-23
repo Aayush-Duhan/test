@@ -5,8 +5,8 @@ import { Workbench } from '~/components/workbench/Workbench.client';
 import { classNames } from '~/utils/classNames';
 import { Messages } from './Messages.client';
 import { ChatInput } from '~/components/ui/ChatInput';
-import { GitHubImportButton } from '~/components/ui/GitHubImportButton';
 import { RayBackground } from '~/components/ui/RayBackground';
+import { SetupWizard, type WizardConfig } from '~/components/wizard/SetupWizard';
 import type { Language } from '~/components/ui/ModelSelector';
 import type { UploadedFile } from '~/components/ui/AttachMenu';
 import type { SnowflakeConnectPayload } from '~/lib/hooks';
@@ -32,6 +32,7 @@ interface BaseChatProps {
   sendMessage?: (event: React.UIEvent, messageInput?: string) => void;
   handleInputChange?: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onLanguageChange?: (language: Language) => void;
+  onWizardComplete?: (config: WizardConfig) => void;
   chatId?: string;
   uploadedFiles?: UploadedFile[];
   onFilesUploaded?: (files: UploadedFile[]) => void;
@@ -59,6 +60,7 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       handleInputChange,
       handleStop,
       onLanguageChange,
+      onWizardComplete,
       chatId,
       uploadedFiles,
       onFilesUploaded,
@@ -116,45 +118,15 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
                   </div>
                 </div>
               ) : (
-                <div className="relative z-10 flex h-full w-full items-center justify-center px-4 pb-24 pt-8 sm:pt-10">
-                  <div className="flex w-full max-w-[980px] flex-col items-center">
-                    <div id="intro" className="flex flex-col items-center text-center">
-                      <h1 className="mt-7 text-5xl sm:text-6xl font-bold text-white tracking-tight leading-[1.05]">
-                        What will you{' '}
-                        <span className="bg-gradient-to-b from-[#4da5fc] via-[#4da5fc] to-white bg-clip-text text-transparent italic">
-                          Migrate
-                        </span>{' '}
-                        today?
-                      </h1>
-                      <p className="mt-3 text-lg font-semibold text-[#8a8a8f]">
-                        Migrate your database by chatting with AI.
-                      </p>
-                    </div>
-                    <div className="mt-8 w-full max-w-[700px]">
-                      <ChatInput
-                        input={input}
-                        onInputChange={(event) => handleInputChange?.(event)}
-                        onSend={(event) => sendMessage?.(event)}
-                        onStop={handleStop}
-                        isStreaming={isStreaming}
-                        canSend={canSend}
-                        snowflakeConnected={snowflakeConnected}
-                        snowflakeBusy={snowflakeBusy}
-                        snowflakeError={snowflakeError}
-                        onSnowflakeConnect={onSnowflakeConnect}
-                        onSnowflakeDisconnect={onSnowflakeDisconnect}
-                        onLanguageChange={onLanguageChange}
-                        chatId={chatId}
-                        uploadedFiles={uploadedFiles}
-                        onFilesUploaded={onFilesUploaded}
-                        onFileRemove={onFileRemove}
-                        placeholder="What do you want to migrate?"
-                      />
-                    </div>
-                    <div id="examples" className="mt-6 flex justify-center">
-                      <GitHubImportButton />
-                    </div>
-                  </div>
+                <div className="relative z-10 flex h-full w-full items-center justify-center px-4 py-8 overflow-y-auto">
+                  <SetupWizard
+                    snowflakeConnected={snowflakeConnected}
+                    snowflakeBusy={snowflakeBusy}
+                    snowflakeError={snowflakeError}
+                    onSnowflakeConnect={onSnowflakeConnect!}
+                    onSnowflakeDisconnect={onSnowflakeDisconnect!}
+                    onComplete={(config) => onWizardComplete?.(config)}
+                  />
                 </div>
               )}
             </div>
